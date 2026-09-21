@@ -1,0 +1,512 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// 01. User & Access Management
+// ---------------------------------------------------------------------------
+
+enum Role {
+  SUPER_ADMIN
+  EXECUTIVE_VIEWER
+  SALES_ADMIN
+  PPIC
+  HEAD_PRODUCTION
+  ACCOUNT_EXECUTIVE
+  SALES_MANAGER
+  PRODUCT_WAREHOUSE
+  RAW_MATERIAL_WAREHOUSE
+  PURCHASING
+  SHIPMENT_DIVISION
+  DISTRIBUTOR
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model User {
+  id           String     @id @default(cuid())
+  fullName     String
+  email        String     @unique
+  passwordHash String
+  division     String?
+  role         Role
+  status       UserStatus @default(ACTIVE)
+  distributorId String?
+  distributor  Distributor? @relation(fields: [distributorId], references: [id])
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  loginHistory   LoginHistory[]
+  auditLogs      AuditLog[]
+  assignedDistributors Distributor[] @relation("AssignedAE")
+}
+
+model LoginHistory {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  loginAt   DateTime @default(now())
+  ip        String?
+}
+
+// ---------------------------------------------------------------------------
+// 03. Distributor Management
+// ---------------------------------------------------------------------------
+
+model Distributor {
+  id             String     @id @default(cuid())
+  code           String     @unique
+  companyName    String
+  assignedAeId   String?
+  assignedAe     User?      @relation("AssignedAE", fields: [assignedAeId], references: [id])
+  contact        String?
+  shippingAddress String
+  region         String?
+  city           String?
+  status         UserStatus @default(ACTIVE)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  users              User[]
+  purchaseOrders     PurchaseOrder[]
+  shipments          Shipment[]
+}
+
+// ---------------------------------------------------------------------------
+// 04. Product Master
+// ---------------------------------------------------------------------------
+
+model Product {
+  id             String     @id @default(cuid())
+  brand          String
+  productName    String
+  flavor         String?
+  size           String?
+  sku            String     @unique
+  cartonLengthCm Float
+  cartonWidthCm  Float
+  cartonHeightCm Float
+  grossWeightKg  Float
+  status         UserStatus @default(ACTIVE)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  poItems              POItem[]
+  productionRequirements ProductionRequirement[]
+  productionSchedules  ProductionSchedule[]
+  productionActuals    ProductionActual[]
+  fgMovements          FGMovement[]
+  shipmentItems        ShipmentItem[]
+  doItems              DOItem[]
+  materialRequirements ProductMaterialRequirement[]
+
+  // computed on write: CBM per CTN = L x W x H / 1,000,000
+  cbmPerCtn      Float
+}
+
+// ---------------------------------------------------------------------------
+// 05. Raw Material Master
+// ---------------------------------------------------------------------------
+
+model RawMaterial {
+  id            String     @id @default(cuid())
+  code          String     @unique
+  name          String
+  category      String?
+  unit          String
+  minimumStock  Float      @default(0)
+  status        UserStatus @default(ACTIVE)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  rmMovements        RMMovement[]
+  materialRequests    MaterialRequest[]
+  materialAvailability MaterialAvailability[]
+  productRequirements ProductMaterialRequirement[]
+}
+
+// BOM: how much of a raw material is required per CTN of a product
+model ProductMaterialRequirement {
+  id            String      @id @default(cuid())
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id])
+  rawMaterialId String
+  rawMaterial   RawMaterial @relation(fields: [rawMaterialId], references: [id])
+  qtyPerCtn     Float
+
+  @@unique([productId, rawMaterialId])
+}
+
+// ---------------------------------------------------------------------------
+// 06 / 07. Purchase Order & PO Revision
+// ---------------------------------------------------------------------------
+
+enum POStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  ACCEPTED
+  REJECTED
+  REVISION_REQUESTED
+}
+
+model PurchaseOrder {
+  id                    String        @id @default(cuid())
+  poNumber              String        @unique
+  distributorId         String
+  distributor           Distributor   @relation(fields: [distributorId], references: [id])
+  requestedShippingDate DateTime
+  status                POStatus      @default(DRAFT)
+  notes                 String?
+  createdById           String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  items       POItem[]
+  revisions   PORevision[]
+  shipment    Shipment?
+
+  @@index([status])
+}
+
+model POItem {
+  id        String        @id @default(cuid())
+  poId      String
+  po        PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product       @relation(fields: [productId], references: [id])
+  qtyCtn    Float
+}
+
+enum RevisionStatus {
+  SUBMITTED
+  UNDER_AE_REVIEW
+  ACCEPTED
+  REJECTED
+}
+
+model PORevision {
+  id                    String         @id @default(cuid())
+  poId                  String
+  po                    PurchaseOrder  @relation(fields: [poId], references: [id])
+  version               Int
+  requestedChanges      String
+  newRequestedShippingDate DateTime?
+  reason                String?
+  status                RevisionStatus @default(SUBMITTED)
+  aeDecisionById        String?
+  createdAt             DateTime       @default(now())
+  decidedAt             DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// 08. Shipment Schedule
+// ---------------------------------------------------------------------------
+
+enum ShipmentStatus {
+  PENDING_CONFIRMATION
+  CONFIRMED
+  READY
+  SHIPPED
+  COMPLETED
+}
+
+model Shipment {
+  id                    String         @id @default(cuid())
+  poId                  String         @unique
+  po                    PurchaseOrder  @relation(fields: [poId], references: [id])
+  distributorId         String
+  distributor           Distributor    @relation(fields: [distributorId], references: [id])
+  requestedShippingDate DateTime
+  confirmedShippingDate DateTime?
+  status                ShipmentStatus @default(PENDING_CONFIRMATION)
+  createdAt             DateTime       @default(now())
+  updatedAt              DateTime      @updatedAt
+
+  productionRequirements ProductionRequirement[]
+  items                  ShipmentItem[]
+  deliveryOrder           DeliveryOrder?
+}
+
+model ShipmentItem {
+  id         String   @id @default(cuid())
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  qtyCtn     Float
+}
+
+// ---------------------------------------------------------------------------
+// 09. Production Requirement
+// ---------------------------------------------------------------------------
+
+model ProductionRequirement {
+  id               String   @id @default(cuid())
+  shipmentId       String
+  shipment         Shipment @relation(fields: [shipmentId], references: [id])
+  productId        String
+  product          Product  @relation(fields: [productId], references: [id])
+  poRequirementCtn Float
+  availableFgCtn   Float
+  needProductionCtn Float
+  requiredBy       DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  materialAvailability MaterialAvailability[]
+  productionSchedules  ProductionSchedule[]
+}
+
+// ---------------------------------------------------------------------------
+// 10. Material Availability
+// ---------------------------------------------------------------------------
+
+enum AvailabilityStatus {
+  AVAILABLE
+  INSUFFICIENT
+  INCOMING
+}
+
+model MaterialAvailability {
+  id                       String                 @id @default(cuid())
+  productionRequirementId  String
+  productionRequirement    ProductionRequirement  @relation(fields: [productionRequirementId], references: [id])
+  rawMaterialId            String
+  rawMaterial              RawMaterial            @relation(fields: [rawMaterialId], references: [id])
+  requiredQty              Float
+  currentAvailable         Float
+  incomingQty              Float                  @default(0)
+  expectedAvailabilityDate DateTime?
+  status                   AvailabilityStatus     @default(INSUFFICIENT)
+  updatedAt                DateTime               @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// 11. Production Scheduling
+// ---------------------------------------------------------------------------
+
+enum ScheduleStatus {
+  PLANNED
+  SCHEDULED
+  IN_PRODUCTION
+  COMPLETED
+  CANCELLED
+}
+
+model ProductionSchedule {
+  id                       String                @id @default(cuid())
+  productionRequirementId  String?
+  productionRequirement    ProductionRequirement? @relation(fields: [productionRequirementId], references: [id])
+  productId                String
+  product                  Product               @relation(fields: [productId], references: [id])
+  productionDate           DateTime
+  plannedCtn               Float
+  line                     String
+  shift                    String
+  status                   ScheduleStatus        @default(PLANNED)
+  notes                    String?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+
+  actuals ProductionActual[]
+}
+
+// ---------------------------------------------------------------------------
+// 12. Production Actual
+// ---------------------------------------------------------------------------
+
+enum ActualStatus {
+  PENDING
+  IN_PRODUCTION
+  COMPLETED
+}
+
+model ProductionActual {
+  id                   String       @id @default(cuid())
+  scheduleId           String
+  schedule             ProductionSchedule @relation(fields: [scheduleId], references: [id])
+  productId            String
+  product              Product      @relation(fields: [productId], references: [id])
+  actualCtn             Float       @default(0)
+  rejectCtn             Float       @default(0)
+  goodOutputCtn          Float      @default(0)
+  batch                String?
+  productionDate        DateTime
+  expiryDate            DateTime?
+  shift                String?
+  line                 String?
+  notes                String?
+  status               ActualStatus @default(PENDING)
+  receivedToWarehouse  Boolean      @default(false)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  fgMovement FGMovement?
+}
+
+// ---------------------------------------------------------------------------
+// 13. Finished Goods Inventory
+// ---------------------------------------------------------------------------
+
+enum MovementType {
+  IN
+  OUT
+  RETURN
+  ADJUSTMENT
+}
+
+model FGMovement {
+  id                 String       @id @default(cuid())
+  type               MovementType
+  productId          String
+  product            Product      @relation(fields: [productId], references: [id])
+  qtyCtn             Float
+  reference          String?
+  batch              String?
+  productionActualId String?      @unique
+  productionActual   ProductionActual? @relation(fields: [productionActualId], references: [id])
+  deliveryOrderId    String?
+  deliveryOrder      DeliveryOrder? @relation(fields: [deliveryOrderId], references: [id])
+  notesReason        String?
+  userId             String?
+  createdAt          DateTime     @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// 14. Raw Material Inventory
+// ---------------------------------------------------------------------------
+
+model RMMovement {
+  id            String       @id @default(cuid())
+  type          MovementType
+  rawMaterialId String
+  rawMaterial   RawMaterial  @relation(fields: [rawMaterialId], references: [id])
+  qty           Float
+  reference     String?
+  notesReason   String?
+  userId        String?
+  createdAt     DateTime     @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// 15. Material Request & Purchasing
+// ---------------------------------------------------------------------------
+
+enum RequestStatus {
+  REQUESTED
+  PROCESSING
+  INCOMING
+  AVAILABLE
+  CLOSED
+}
+
+model MaterialRequest {
+  id                       String        @id @default(cuid())
+  requestNumber            String        @unique
+  rawMaterialId            String
+  rawMaterial              RawMaterial   @relation(fields: [rawMaterialId], references: [id])
+  currentStockAtRequest    Float
+  requestedQty             Float
+  requiredDate             DateTime
+  reason                   String?
+  status                   RequestStatus @default(REQUESTED)
+  incomingQty              Float?
+  expectedAvailabilityDate DateTime?
+  createdById              String?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// 17. Delivery Order (16. Shipment & Cubication is derived from Shipment/ShipmentItem)
+// ---------------------------------------------------------------------------
+
+model DeliveryOrder {
+  id               String   @id @default(cuid())
+  doNumber         String   @unique
+  shipmentId       String   @unique
+  shipment         Shipment @relation(fields: [shipmentId], references: [id])
+  deliveryAddress  String
+  shipmentDate     DateTime
+  totalCtn         Float
+  totalCbm         Float
+  totalGrossWeight Float
+  preparedBy       String?
+  printCount       Int      @default(0)
+  createdById      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  items      DOItem[]
+  fgMovements FGMovement[]
+}
+
+model DOItem {
+  id        String        @id @default(cuid())
+  doId      String
+  deliveryOrder DeliveryOrder @relation(fields: [doId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product       @relation(fields: [productId], references: [id])
+  qtyCtn    Float
+}
+
+// ---------------------------------------------------------------------------
+// 18/19. Sales Target (for Sales Monitoring / Reports)
+// ---------------------------------------------------------------------------
+
+model SalesTarget {
+  id           String   @id @default(cuid())
+  periodYear   Int
+  periodMonth  Int
+  distributorId String?
+  productId    String?
+  targetCtn    Float
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([periodYear, periodMonth, distributorId, productId])
+}
+
+// ---------------------------------------------------------------------------
+// 20. Audit & System Settings
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String
+  module     String
+  recordId   String?
+  oldValues  String?
+  newValues  String?
+  createdAt  DateTime @default(now())
+
+  @@index([module])
+  @@index([createdAt])
+}
+
+model NumberingSetting {
+  id      String @id @default(cuid())
+  key     String @unique // e.g. "PO", "DO", "MATERIAL_REQUEST"
+  prefix  String
+  nextSeq Int    @default(1)
+}
+
+model ProductionResource {
+  id     String @id @default(cuid())
+  type   String // LINE | MACHINE | SHIFT
+  name   String
+  status UserStatus @default(ACTIVE)
+
+  @@unique([type, name])
+}
