@@ -4,11 +4,17 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { NavItem } from "@/lib/nav";
 
-export default function Sidebar({ groups }: { groups: { group: string; items: NavItem[] }[] }) {
+export default function Sidebar({
+  groups,
+  onNavigate,
+}: {
+  groups: { group: string; items: NavItem[] }[];
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
 
   return (
-    <nav className="space-y-6">
+    <nav className="space-y-6" aria-label="Modules">
       {groups.map(({ group, items }) => (
         <div key={group}>
           <p className="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-brand-200">
@@ -21,10 +27,10 @@ export default function Sidebar({ groups }: { groups: { group: string; items: Na
                 <li key={item.href}>
                   <Link
                     href={item.href}
+                    onClick={onNavigate}
+                    aria-current={active ? "page" : undefined}
                     className={`block rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                      active
-                        ? "bg-white text-brand-800"
-                        : "text-brand-50 hover:bg-brand-700/60"
+                      active ? "bg-white text-brand-800" : "text-brand-50 hover:bg-brand-700/60"
                     }`}
                   >
                     {item.label}
